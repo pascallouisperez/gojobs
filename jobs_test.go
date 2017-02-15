@@ -197,7 +197,7 @@ func (s *JobsSuite) TestAttemptLock_concurrentModification(c *C) {
 
 	// Let's assume another worked raced us to process the job.
 	_, err = s.db.Exec("update job_queue set status = ? where id = ?",
-		STATUS_PROCESSING, jobId)
+		statusProcessing, jobId)
 	c.Assert(err, IsNil)
 
 	// Now, we shouldn't be able to lock.
@@ -372,12 +372,12 @@ func (s *JobsSuite) TestStartStop(c *C) {
 	err = s.jq.Start()
 	c.Assert(err, IsNil)
 	status = atomic.LoadInt32(s.jq.status)
-	c.Assert(status, Equals, QUEUE_RUNNING)
+	c.Assert(status, Equals, queueRunning)
 
 	err = s.jq.Stop()
 	c.Assert(err, IsNil)
 	status = atomic.LoadInt32(s.jq.status)
-	c.Assert(status, Equals, QUEUE_STOPPED)
+	c.Assert(status, Equals, queueStopped)
 }
 
 func (s *JobsSuite) TestProcessSomeJobs_allComplete(c *C) {

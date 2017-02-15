@@ -14,21 +14,21 @@ import (
 )
 
 const (
-	STATUS_PENDING     = "pending"
-	STATUS_PROCESSING  = "processing"
-	STATUS_FAILED      = "failed"
-	STATUS_COMPLETETED = "completed"
+	statusPending    = "pending"
+	statusProcessing = "processing"
+	statusFailed     = "failed"
+	statusCompleted  = "completed"
 )
 
 const (
 	_ int32 = iota
-	QUEUE_STOPPED
-	QUEUE_STARTING
-	QUEUE_RUNNING
-	QUEUE_STOPPING
+	queueStopped
+	queueStarting
+	queueRunning
+	queueStopping
 )
 
-type Clock interface {
+type clock interface {
 	// UnixNow returns the number of seconds elapsed since January 1, 1970 UTC
 	// Equivalent of time.Now().Unix()
 	UnixNow() int64
@@ -40,7 +40,7 @@ type JobQueue struct {
 	configs     map[string]jobConfig
 	status      *int32
 	workersWg   sync.WaitGroup
-	clock       Clock
+	clock       clock
 }
 
 type jobConfig struct {
@@ -70,7 +70,7 @@ func (realClock) UnixNow() int64 {
 }
 
 func NewJobQueue(db *sql.DB, processorId int64) *JobQueue {
-	status := QUEUE_STOPPED
+	status := queueStopped
 	jq := JobQueue{
 		db:          db,
 		processorId: processorId,
@@ -81,7 +81,7 @@ func NewJobQueue(db *sql.DB, processorId int64) *JobQueue {
 	return &jq
 }
 
-var HANDLER_MATCHER = reflext.MustCompile("func ({*struct}) error")
+var handlerMatcher = reflext.MustCompile("func ({*struct}) error")
 
 // OptionalJobConfiguration groups optional job configuration parameters. For
 // all parameters, reasonable defaults are provided by the library.
@@ -106,7 +106,7 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...Optio
 		return errors.New("job %s: already registered", name)
 	}
 
-	if st := atomic.LoadInt32(jq.status); st != QUEUE_STOPPED {
+	if st := atomic.LoadInt32(jq.status); st != queueStopped {
 		// TODO(pascal): if we cared about super pedantic, we should increment
 		// a wait group on entry to Register, and wait on this wg in Start to
 		// allow concurrent registrations to complete. But then, we should
@@ -121,10 +121,10 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...Optio
 	}
 
 	var paramsType reflect.Type
-	if types, ok := HANDLER_MATCHER.FindAll(handler); ok {
+	if types, ok := handlerMatcher.FindAll(handler); ok {
 		paramsType = types[0]
 	} else {
-		return errors.New("job %s: expected %s, was %T", name, HANDLER_MATCHER, handler)
+		return errors.New("job %s: expected %s, was %T", name, handlerMatcher, handler)
 	}
 
 	// Defaults.
@@ -158,7 +158,7 @@ func (jq *JobQueue) worker() {
 	defer jq.workersWg.Done()
 
 	for {
-		if st := atomic.LoadInt32(jq.status); st == QUEUE_STOPPING {
+		if st := atomic.LoadInt32(jq.status); st == queueStopping {
 			return
 		}
 
@@ -177,10 +177,10 @@ func (jq *JobQueue) worker() {
 			if rec.remaining > 0 {
 				err = jq.reEnqueue(rec)
 			} else {
-				err = jq.markAs(rec.id, STATUS_FAILED)
+				err = jq.markAs(rec.id, statusFailed)
 			}
 		} else {
-			err = jq.markAs(rec.id, STATUS_COMPLETETED)
+			err = jq.markAs(rec.id, statusCompleted)
 		}
 
 		if err != nil {
@@ -191,21 +191,21 @@ func (jq *JobQueue) worker() {
 }
 
 func (jq *JobQueue) Start() error {
-	if !atomic.CompareAndSwapInt32(jq.status, QUEUE_STOPPED, QUEUE_STARTING) {
+	if !atomic.CompareAndSwapInt32(jq.status, queueStopped, queueStarting) {
 		// TODO(pascal): should this simply be a noop?
 		return errors.New("already started")
 	}
 	go jq.worker()
-	atomic.StoreInt32(jq.status, QUEUE_RUNNING)
+	atomic.StoreInt32(jq.status, queueRunning)
 	return nil
 }
 
 func (jq *JobQueue) Stop() error {
-	if !atomic.CompareAndSwapInt32(jq.status, QUEUE_RUNNING, QUEUE_STOPPING) {
+	if !atomic.CompareAndSwapInt32(jq.status, queueRunning, queueStopping) {
 		return errors.New("unable to stop")
 	}
 	jq.workersWg.Wait()
-	atomic.StoreInt32(jq.status, QUEUE_STOPPED)
+	atomic.StoreInt32(jq.status, queueStopped)
 	return nil
 }
 
@@ -236,7 +236,7 @@ func (jq *JobQueue) Enqueue(tx *sql.Tx, name string, params interface{}) (int64,
 	res, err := tx.Exec(`
 		insert into job_queue (name, params, remaining, status, created_at, schedulable_at)
 		values (?, ?, ?, ?, ?, ?)`,
-		name, paramsAsBytes, conf.attempts, STATUS_PENDING, now, now)
+		name, paramsAsBytes, conf.attempts, statusPending, now, now)
 	if err != nil {
 		return -1, err
 	}
@@ -319,7 +319,7 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 		select id from job_queue
 		where status = ? and remaining > 0 and schedulable_at <= ?
 		order by id asc limit 1`,
-		STATUS_PENDING, now)
+		statusPending, now)
 	if err != nil {
 		return -1, false, err
 	}
@@ -337,7 +337,7 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 func (jq *JobQueue) attemptLock(jobId int64) (bool, error) {
 	res, err := jq.db.Exec(
 		"update job_queue set status = ?, processor_id = ?, remaining = remaining - 1 where id = ? and status = ?",
-		STATUS_PROCESSING, jq.processorId, jobId, STATUS_PENDING)
+		statusProcessing, jq.processorId, jobId, statusPending)
 	if err != nil {
 		return false, err
 	}
@@ -361,7 +361,7 @@ func (jq *JobQueue) reEnqueue(rec *jobRecord) error {
 	newSchedulableAt := jq.clock.UnixNow() + conf.backoffInSeconds*int64(backoffMultiplier)
 	_, err := jq.db.Exec(
 		"update job_queue set status = ?, schedulable_at = ?, processor_id = null where id = ?",
-		STATUS_PENDING, newSchedulableAt, rec.id)
+		statusPending, newSchedulableAt, rec.id)
 	return err
 }
 
