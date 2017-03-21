@@ -1,4 +1,4 @@
-package jobs
+package gojobs
 
 import (
 	"database/sql"
@@ -83,9 +83,9 @@ func NewJobQueue(db *sql.DB, processorId int64) *JobQueue {
 
 var handlerMatcher = reflext.MustCompile("func ({*struct}) error")
 
-// OptionalJobConfiguration groups optional job configuration parameters. For
+// JobConfiguration groups optional job configuration parameters. For
 // all parameters, reasonable defaults are provided by the library.
-type OptionalJobConfiguration struct {
+type JobConfiguration struct {
 	// Attempts specifies the number processing attempts to try before aborting
 	// a job, and marking is failed.
 	Attempts int
@@ -97,7 +97,7 @@ type OptionalJobConfiguration struct {
 	Backoff time.Duration
 }
 
-func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...OptionalJobConfiguration) error {
+func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobConfiguration) error {
 	if name == "" {
 		return errors.New("job name cannot be empty")
 	}

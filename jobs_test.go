@@ -1,4 +1,4 @@
-package jobs
+package gojobs
 
 import (
 	"database/sql"
@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pascallouisperez/gomysql/testing"
+	"github.com/pascallouisperez/gomysql/dbtest"
 
 	. "gopkg.in/check.v1"
 )
@@ -61,7 +61,7 @@ func (s *JobsSuite) SetUpTest(c *C) {
 	}
 	s.jq = NewJobQueue(s.db, 78)
 	s.jq.clock = &fakeClock{now: 100}
-	err := s.jq.Register("name_of_job", nameOfJobHandler, OptionalJobConfiguration{
+	err := s.jq.Register("name_of_job", nameOfJobHandler, JobConfiguration{
 		Backoff: 1 * time.Second,
 	})
 	c.Assert(err, IsNil)
@@ -86,7 +86,7 @@ func (s *JobsSuite) TestRegister_errorChecking(c *C) {
 		},
 		{
 			f: func() error {
-				return s.jq.Register("foo", nameOfJobHandler, OptionalJobConfiguration{}, OptionalJobConfiguration{})
+				return s.jq.Register("foo", nameOfJobHandler, JobConfiguration{}, JobConfiguration{})
 			},
 			e: "^.*: job foo: too many optional configurations provided$",
 		},
@@ -116,7 +116,7 @@ func (s *JobsSuite) TestRegister_errorChecking(c *C) {
 }
 
 func (s *JobsSuite) TestRegister_optionalConf(c *C) {
-	err := s.jq.Register("foo", nameOfJobHandler, OptionalJobConfiguration{
+	err := s.jq.Register("foo", nameOfJobHandler, JobConfiguration{
 		Attempts: 13,
 		Backoff:  6*time.Second + 5*time.Minute,
 	})
@@ -145,7 +145,7 @@ func (s *JobsSuite) TestEnqueue(c *C) {
 	c.Assert(rec, NotNil)
 	c.Assert(rec.id, Equals, int64(456))
 	c.Assert(rec.name, Equals, "name_of_job")
-	c.Assert(string(rec.params), Equals, "{\"n\":8}")
+	c.Assert(string(rec.params), Equals, `{"n":8}`)
 	c.Assert(rec.remaining, Equals, 3)
 }
 
