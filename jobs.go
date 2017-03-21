@@ -279,7 +279,7 @@ func (jq *JobQueue) safeProcess(rec *jobRecord, conf jobConfig) error {
 	}()
 
 	// Logging.
-	elapsed = (time.Now().UnixNano() - elapsed) / 100000
+	elapsed = (time.Now().UnixNano() - elapsed) / 1000000
 	if err == nil {
 		glog.Infof("job %s(%d) succeeded: attempt=%d, elapsed=%dms",
 			rec.name, rec.id,
