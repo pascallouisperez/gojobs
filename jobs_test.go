@@ -159,6 +159,25 @@ func (s *JobsSuite) TestEnqueue_wrongParams(c *C) {
 	c.Assert(err, ErrorMatches, "^.*job name_of_job: incorrect param type, expected .*nameOfJobParams, got int$")
 }
 
+func (s *JobsSuite) TestGet(c *C) {
+	s.setAutoId("job_queue", 456)
+
+	var jobId *int64
+	s.inTx(func(tx *sql.Tx) {
+		id, err := s.jq.Enqueue(tx, "name_of_job", &nameOfJobParams{Num: 8})
+		c.Assert(err, IsNil)
+		jobId = &id
+	})
+
+	job, err := s.jq.Get(*jobId)
+	c.Assert(err, IsNil)
+	c.Assert(job.ID(), Equals, int64(456))
+	c.Assert(job.Name(), Equals, "name_of_job")
+	params, err := job.Params()
+	c.Assert(err, IsNil)
+	c.Assert(params, DeepEquals, &nameOfJobParams{Num: 8})
+}
+
 func (s *JobsSuite) TestAttemptLock_decreasesRemaining(c *C) {
 	var (
 		jobId int64

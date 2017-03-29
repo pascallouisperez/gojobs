@@ -34,6 +34,8 @@ type clock interface {
 	UnixNow() int64
 }
 
+// JobQueue is the entry point to registering, scheduling, and querying
+// jobs.
 type JobQueue struct {
 	db          *sql.DB
 	processorId int64
@@ -41,6 +43,17 @@ type JobQueue struct {
 	status      *int32
 	workersWg   sync.WaitGroup
 	clock       clock
+}
+
+type Job interface {
+	// ID returns the identifier of the job.
+	ID() int64
+
+	// Name returns the name of the job.
+	Name() string
+
+	// Params returns the specific struct associated with this job.
+	Params() (interface{}, error)
 }
 
 type jobConfig struct {
@@ -247,6 +260,18 @@ func (jq *JobQueue) Enqueue(tx *sql.Tx, name string, params interface{}) (int64,
 	return jobId, nil
 }
 
+func (jq *JobQueue) Get(jobId int64) (Job, error) {
+	rec, err := jq.getJobRecord(jobId)
+	if err != nil {
+		return nil, err
+	}
+	conf, ok := jq.configs[rec.name]
+	if !ok {
+		return nil, errors.New("job %s has not been registered", rec.name)
+	}
+	return &jobRecordExternal{rec, conf.paramsType}, nil
+}
+
 func (jq *JobQueue) safeProcess(rec *jobRecord, conf jobConfig) error {
 	var (
 		err     error
@@ -263,12 +288,9 @@ func (jq *JobQueue) safeProcess(rec *jobRecord, conf jobConfig) error {
 		}()
 
 		err = func() error {
-			params := reflect.New(conf.paramsType.Elem()).Interface()
-			if rec.params != nil {
-				err = json.Unmarshal(rec.params, &params)
-				if err != nil {
-					return errors.New("job %s unmarshall error: %s", conf.name, err)
-				}
+			params, err := (&jobRecordExternal{rec, conf.paramsType}).Params()
+			if err != nil {
+				return err
 			}
 			returns := conf.handler.Call([]reflect.Value{reflect.ValueOf(params)})
 			if !returns[0].IsNil() {
@@ -387,4 +409,30 @@ func (jq *JobQueue) getJobRecord(jobId int64) (*jobRecord, error) {
 		schedulableAt: schedulableAt,
 	}
 	return &rec, nil
+}
+
+type jobRecordExternal struct {
+	*jobRecord
+	paramsType reflect.Type
+}
+
+// Assert jobRecord implements the Job interface.
+var _ Job = &jobRecordExternal{}
+
+func (rec *jobRecordExternal) ID() int64 {
+	return rec.id
+}
+
+func (rec *jobRecordExternal) Name() string {
+	return rec.name
+}
+
+func (rec *jobRecordExternal) Params() (interface{}, error) {
+	params := reflect.New(rec.paramsType.Elem()).Interface()
+	if rec.params != nil {
+		if err := json.Unmarshal(rec.params, &params); err != nil {
+			return nil, errors.New("job %s unmarshall error: %s", rec.name, err)
+		}
+	}
+	return params, nil
 }
