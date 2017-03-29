@@ -372,7 +372,7 @@ func (jq *JobQueue) attemptLock(jobId int64) (bool, error) {
 
 func (jq *JobQueue) markAs(jobId int64, status string) error {
 	_, err := jq.db.Exec(
-		"update job_queue set status = ?, schedulable_at = null, processor_id = null where id = ?",
+		"update job_queue set status = ?, processor_id = null where id = ?",
 		status, jobId)
 	return err
 }

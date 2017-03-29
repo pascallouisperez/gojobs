@@ -6,7 +6,7 @@ CREATE TABLE job_queue (
   params          blob null,
 
   remaining       int not null,
-  schedulable_at  bigint null,
+  schedulable_at  bigint not null,
   processor_id    bigint null,
   status          enum('pending', 'processing', 'failed', 'completed'),
 
