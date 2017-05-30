@@ -345,6 +345,7 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 	if err != nil {
 		return -1, false, err
 	}
+	defer rows.Close()
 	if !rows.Next() {
 		return -1, false, nil
 	}
@@ -388,16 +389,17 @@ func (jq *JobQueue) reEnqueue(rec *jobRecord) error {
 }
 
 func (jq *JobQueue) getJobRecord(jobId int64) (*jobRecord, error) {
-	row := jq.db.QueryRow(
-		"select name, params, remaining, schedulable_at from job_queue where id = ?",
-		jobId)
 	var (
 		name          string
 		params        []byte
 		remaining     int
 		schedulableAt int64
 	)
-	err := row.Scan(&name, &params, &remaining, &schedulableAt)
+	err := jq.db.
+		QueryRow(
+			"select name, params, remaining, schedulable_at from job_queue where id = ?",
+			jobId).
+		Scan(&name, &params, &remaining, &schedulableAt)
 	if err != nil {
 		return nil, err
 	}
