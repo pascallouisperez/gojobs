@@ -255,24 +255,6 @@ func (s *JobsSuite) TestMaybeNext(c *C) {
 	c.Assert(hasNext, Equals, false)
 }
 
-func (s *JobsSuite) TestNextAndLock(c *C) {
-	s.setAutoId("job_queue", 123)
-
-	rec, err := s.jq.nextAndLock()
-	c.Assert(err, IsNil)
-	c.Assert(rec, IsNil)
-
-	s.inTx(func(tx *sql.Tx) {
-		_, err = s.jq.Enqueue(tx, "name_of_job", nil)
-		c.Assert(err, IsNil)
-	})
-
-	rec, err = s.jq.nextAndLock()
-	c.Assert(err, IsNil)
-	c.Assert(rec, NotNil)
-	c.Assert(rec.id, Equals, int64(123))
-}
-
 func (s *JobsSuite) TestReEnqueue(c *C) {
 	s.setAutoId("job_queue", 123)
 
