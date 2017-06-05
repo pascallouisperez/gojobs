@@ -390,7 +390,7 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 	rows, err := jq.db.Query(`
 		select id from job_queue
 		where status = ? and remaining > 0 and schedulable_at <= ?
-		order by id asc limit 1`,
+		order by schedulable_at asc limit 1`,
 		statusPending, now)
 	if err != nil {
 		return -1, false, err
