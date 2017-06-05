@@ -37,11 +37,16 @@ type clock interface {
 // JobQueue is the entry point to registering, scheduling, and querying
 // jobs.
 type JobQueue struct {
+	numFetchers int
+	numWorkers  int
+
 	db          *sql.DB
 	processorId int64
 	configs     map[string]jobConfig
 	status      *int32
 	workersWg   sync.WaitGroup
+	fetcherWg   sync.WaitGroup
+	maybeJobIds chan int64
 	clock       clock
 }
 
@@ -82,7 +87,15 @@ func (realClock) UnixNow() int64 {
 	return time.Now().Unix()
 }
 
-func NewJobQueue(db *sql.DB, processorId int64) *JobQueue {
+// QueueConfiguration groups optional queue configuration parameters. For
+// all parameters, reasonable defaults are provided by the library.
+type QueueConfiguration struct {
+	// NumWorkers specifies the number of workers (i.e. goroutines processing
+	// jobs) to spawn when this queue is started. Default is 5.
+	NumWorkers int
+}
+
+func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) *JobQueue {
 	status := queueStopped
 	jq := JobQueue{
 		db:          db,
@@ -90,7 +103,21 @@ func NewJobQueue(db *sql.DB, processorId int64) *JobQueue {
 		configs:     make(map[string]jobConfig, 10),
 		status:      &status,
 		clock:       realClock{},
+		maybeJobIds: make(chan int64),
+		numFetchers: 1,
+		numWorkers:  5,
 	}
+
+	// Optional configuration.
+	if size := len(optConfs); size > 1 {
+		panic("too many configurations provided")
+	} else if size == 1 {
+		conf := optConfs[0]
+		if conf.NumWorkers > 0 {
+			jq.numWorkers = conf.NumWorkers
+		}
+	}
+
 	return &jq
 }
 
@@ -166,7 +193,29 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 	return nil
 }
 
-func (jq *JobQueue) worker() {
+func (jq *JobQueue) fetcher(fetcherIndex int) {
+	jq.fetcherWg.Add(1)
+	defer jq.fetcherWg.Done()
+
+	for {
+		if st := atomic.LoadInt32(jq.status); st == queueStopping {
+			return
+		}
+
+		jobId, hasNext, err := jq.maybeNext()
+		if err != nil {
+			glog.Infof("fetcher[%d], internal error while fetching potential next job: %s", fetcherIndex, err)
+		}
+		if !hasNext {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		jq.maybeJobIds <- jobId
+	}
+}
+
+func (jq *JobQueue) worker(workerIndex int) {
 	jq.workersWg.Add(1)
 	defer jq.workersWg.Done()
 
@@ -175,13 +224,19 @@ func (jq *JobQueue) worker() {
 			return
 		}
 
-		rec, err := jq.nextAndLock()
+		jobId := <-jq.maybeJobIds
+
+		locked, err := jq.attemptLock(jobId)
 		if err != nil {
-			glog.Infof("internal error: %s", err)
+			glog.Infof("worker[%d] internal error while attempting to lock job: %s", workerIndex, err)
+		}
+		if !locked {
+			continue
 		}
 
-		if rec == nil {
-			time.Sleep(1 * time.Second)
+		rec, err := jq.getJobRecord(jobId)
+		if err != nil {
+			glog.Infof("worker[%d] internal error while fetching job record: %s", workerIndex, err)
 			continue
 		}
 
@@ -197,19 +252,31 @@ func (jq *JobQueue) worker() {
 		}
 
 		if err != nil {
-			glog.Infof("internal error: %s", err)
+			glog.Infof("worker[%d] internal error in post process of job: %s", err)
 		}
 	}
 
 }
 
 func (jq *JobQueue) Start() error {
+	// Mark queue as starting.
 	if !atomic.CompareAndSwapInt32(jq.status, queueStopped, queueStarting) {
-		// TODO(pascal): should this simply be a noop?
-		return errors.New("already started")
+		return errors.New("can only start a queue which is stopped")
 	}
-	go jq.worker()
+
+	// Start fetchers.
+	for i := 0; i < jq.numFetchers; i++ {
+		go jq.fetcher(i)
+	}
+
+	// Start workers.
+	for i := 0; i < jq.numWorkers; i++ {
+		go jq.worker(i)
+	}
+
+	// Mark queue as running.
 	atomic.StoreInt32(jq.status, queueRunning)
+
 	return nil
 }
 
@@ -217,7 +284,9 @@ func (jq *JobQueue) Stop() error {
 	if !atomic.CompareAndSwapInt32(jq.status, queueRunning, queueStopping) {
 		return errors.New("unable to stop")
 	}
+	close(jq.maybeJobIds)
 	jq.workersWg.Wait()
+	jq.fetcherWg.Wait()
 	atomic.StoreInt32(jq.status, queueStopped)
 	return nil
 }
@@ -314,25 +383,6 @@ func (jq *JobQueue) safeProcess(rec *jobRecord, conf jobConfig) error {
 
 	// Done
 	return err
-}
-
-func (jq *JobQueue) nextAndLock() (*jobRecord, error) {
-	for {
-		jobId, hasNext, err := jq.maybeNext()
-		if err != nil {
-			return nil, err
-		}
-		if !hasNext {
-			return nil, nil
-		}
-		locked, err := jq.attemptLock(jobId)
-		if err != nil {
-			return nil, err
-		}
-		if locked {
-			return jq.getJobRecord(jobId)
-		}
-	}
 }
 
 func (jq *JobQueue) maybeNext() (int64, bool, error) {
