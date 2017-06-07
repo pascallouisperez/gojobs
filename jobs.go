@@ -103,7 +103,6 @@ func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) 
 		configs:     make(map[string]jobConfig, 10),
 		status:      &status,
 		clock:       realClock{},
-		maybeJobIds: make(chan int64),
 		numFetchers: 1,
 		numWorkers:  5,
 	}
@@ -264,6 +263,9 @@ func (jq *JobQueue) Start() error {
 		return errors.New("can only start a queue which is stopped")
 	}
 
+	// Fresh channel.
+	jq.maybeJobIds = make(chan int64)
+
 	// Start fetchers.
 	for i := 0; i < jq.numFetchers; i++ {
 		go jq.fetcher(i)
@@ -288,6 +290,7 @@ func (jq *JobQueue) Stop() error {
 	jq.workersWg.Wait()
 	jq.fetcherWg.Wait()
 	atomic.StoreInt32(jq.status, queueStopped)
+	jq.maybeJobIds = nil
 	return nil
 }
 

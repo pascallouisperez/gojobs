@@ -379,6 +379,17 @@ func (s *JobsSuite) TestStartStop(c *C) {
 	c.Assert(err, IsNil)
 	status = atomic.LoadInt32(s.jq.status)
 	c.Assert(status, Equals, queueStopped)
+
+	// start-stop again
+	err = s.jq.Start()
+	c.Assert(err, IsNil)
+	status = atomic.LoadInt32(s.jq.status)
+	c.Assert(status, Equals, queueRunning)
+
+	err = s.jq.Stop()
+	c.Assert(err, IsNil)
+	status = atomic.LoadInt32(s.jq.status)
+	c.Assert(status, Equals, queueStopped)
 }
 
 func (s *JobsSuite) TestProcessSomeJobs_allComplete(c *C) {
