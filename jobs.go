@@ -308,6 +308,7 @@ func (jq *JobQueue) Stop() error {
 
 	// Cleanup.
 	jq.maybeJobIds = nil
+	jq.quit = nil
 
 	return nil
 }
