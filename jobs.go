@@ -46,8 +46,10 @@ type JobQueue struct {
 	status      *int32
 	workersWg   sync.WaitGroup
 	fetcherWg   sync.WaitGroup
-	maybeJobIds chan int64
 	clock       clock
+
+	maybeJobIds chan int64
+	quit        chan bool
 }
 
 type Job interface {
@@ -210,7 +212,10 @@ func (jq *JobQueue) fetcher(fetcherIndex int) {
 			continue
 		}
 
-		jq.maybeJobIds <- jobId
+		select {
+		case jq.maybeJobIds <- jobId:
+		case <-jq.quit:
+		}
 	}
 }
 
@@ -263,8 +268,9 @@ func (jq *JobQueue) Start() error {
 		return errors.New("can only start a queue which is stopped")
 	}
 
-	// Fresh channel.
+	// Fresh channels.
 	jq.maybeJobIds = make(chan int64)
+	jq.quit = make(chan bool, jq.numFetchers)
 
 	// Start fetchers.
 	for i := 0; i < jq.numFetchers; i++ {
@@ -286,11 +292,23 @@ func (jq *JobQueue) Stop() error {
 	if !atomic.CompareAndSwapInt32(jq.status, queueRunning, queueStopping) {
 		return errors.New("unable to stop")
 	}
+
+	// Stop fetchers.
+	for i := 0; i < jq.numFetchers; i++ {
+		jq.quit <- true
+	}
 	jq.fetcherWg.Wait()
 	close(jq.maybeJobIds)
+
+	// Stop workers.
 	jq.workersWg.Wait()
+
+	// Mark queue as stopped.
 	atomic.StoreInt32(jq.status, queueStopped)
+
+	// Cleanup.
 	jq.maybeJobIds = nil
+
 	return nil
 }
 
