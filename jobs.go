@@ -286,9 +286,9 @@ func (jq *JobQueue) Stop() error {
 	if !atomic.CompareAndSwapInt32(jq.status, queueRunning, queueStopping) {
 		return errors.New("unable to stop")
 	}
+	jq.fetcherWg.Wait()
 	close(jq.maybeJobIds)
 	jq.workersWg.Wait()
-	jq.fetcherWg.Wait()
 	atomic.StoreInt32(jq.status, queueStopped)
 	jq.maybeJobIds = nil
 	return nil
