@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -360,8 +361,15 @@ func (s *JobsSuite) TestSafeProcess_panics(c *C) {
 		}),
 		paramsType: reflect.TypeOf(&nameOfJobParams{}),
 	}
-	err := s.jq.safeProcess(&jobRecord{}, conf)
-	c.Assert(err, ErrorMatches, "^.*job the_name_here panicked: TestSafeProcess_panics$")
+	processErr := s.jq.safeProcess(&jobRecord{}, conf)
+
+	// We cannot use ErrorMatches since it does not work in multiple mode.
+	pattern := `(?m:^.*job the_name_here panicked: TestSafeProcess_panics,.*$)`
+	ok, err := regexp.MatchString(pattern, processErr.Error())
+	c.Assert(err, IsNil)
+	if !ok {
+		c.Errorf("unexpected error: %s", processErr)
+	}
 }
 
 func (s *JobsSuite) TestStartStop(c *C) {

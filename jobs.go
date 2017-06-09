@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"reflect"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -374,7 +375,7 @@ func (jq *JobQueue) safeProcess(rec *jobRecord, conf jobConfig) error {
 		elapsed = time.Now().UnixNano()
 		defer func() {
 			if r := recover(); r != nil {
-				err = errors.New("job %s panicked: %s", conf.name, r)
+				err = errors.New("job %s panicked: %s, %s", conf.name, r, string(debug.Stack()))
 			}
 		}()
 
