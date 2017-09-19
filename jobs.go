@@ -41,6 +41,7 @@ type JobQueue struct {
 	numFetchers int
 	numWorkers  int
 
+	jobName     string
 	db          *sql.DB
 	processorId int64
 	configs     map[string]jobConfig
@@ -96,6 +97,7 @@ type QueueConfiguration struct {
 	// NumWorkers specifies the number of workers (i.e. goroutines processing
 	// jobs) to spawn when this queue is started. Default is 5.
 	NumWorkers int
+	Name       string
 }
 
 func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) *JobQueue {
@@ -115,9 +117,11 @@ func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) 
 		panic("too many configurations provided")
 	} else if size == 1 {
 		conf := optConfs[0]
+		jq.jobName = conf.Name
 		if conf.NumWorkers > 0 {
 			jq.numWorkers = conf.NumWorkers
 		}
+
 	}
 
 	return &jq
@@ -260,7 +264,6 @@ func (jq *JobQueue) worker(workerIndex int) {
 			glog.Infof("worker[%d] internal error in post process of job: %s", err)
 		}
 	}
-
 }
 
 func (jq *JobQueue) Start() error {
@@ -412,9 +415,9 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 	now := jq.clock.UnixNow()
 	rows, err := jq.db.Query(`
 		select id from job_queue
-		where status = ? and remaining > 0 and schedulable_at <= ?
+		where name = ? and status = ? and remaining > 0 and schedulable_at <= ?
 		order by schedulable_at asc limit 1`,
-		statusPending, now)
+		jq.jobName, statusPending, now)
 	if err != nil {
 		return -1, false, err
 	}
