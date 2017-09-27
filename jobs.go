@@ -66,11 +66,12 @@ type Job interface {
 }
 
 type jobConfig struct {
-	name             string
-	handler          reflect.Value
-	paramsType       reflect.Type
-	attempts         int
-	backoffInSeconds int64
+	name               string
+	handler            reflect.Value
+	paramsType         reflect.Type
+	attempts           int
+	backoffInSeconds   int64
+	backoffExponential bool
 }
 
 type jobRecord struct {
@@ -141,6 +142,9 @@ type JobConfiguration struct {
 	// While time.Duration can be expressed in nanoseconds, only durations of seconds
 	// or more are considered valid.
 	Backoff time.Duration
+
+	// BackoffExponential specifies whether to use exponential values for back or not
+	BackoffExponential bool
 }
 
 func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobConfiguration) error {
@@ -175,11 +179,12 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 
 	// Defaults.
 	conf := jobConfig{
-		name:             name,
-		handler:          reflect.ValueOf(handler),
-		paramsType:       paramsType,
-		attempts:         3,
-		backoffInSeconds: 5,
+		name:               name,
+		handler:            reflect.ValueOf(handler),
+		paramsType:         paramsType,
+		attempts:           100,
+		backoffInSeconds:   3,
+		backoffExponential: false,
 	}
 
 	// Optional configuration.
@@ -193,6 +198,9 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 		if b := optConf.Backoff.Nanoseconds() / 1000000000; b > 0 {
 			conf.backoffInSeconds = b
 		}
+
+		conf.backoffExponential = optConf.BackoffExponential
+
 	}
 
 	jq.configs[name] = conf
@@ -456,7 +464,11 @@ func (jq *JobQueue) markAs(jobId int64, status string) error {
 
 func (jq *JobQueue) reEnqueue(rec *jobRecord) error {
 	conf := jq.configs[rec.name]
-	backoffMultiplier := 1 << uint(rec.attempt(conf)-1)
+	backoffMultiplier := 1
+	if conf.backoffExponential {
+		backoffMultiplier = 1 << uint(rec.attempt(conf)-1)
+	}
+
 	newSchedulableAt := jq.clock.UnixNow() + conf.backoffInSeconds*int64(backoffMultiplier)
 	_, err := jq.db.Exec(
 		"update job_queue set status = ?, schedulable_at = ?, processor_id = null where id = ?",
