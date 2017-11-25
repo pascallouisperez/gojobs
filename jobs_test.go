@@ -210,9 +210,10 @@ func (s *JobsSuite) TestFetcherExecutesAttemptLock(c *C) {
 		err   error
 	)
 
-	// clear queue
-	_, err = s.db.Exec("truncate table job_queue")
+	// queue is clear
+	jobId, hasNext, err := s.jq.maybeNext()
 	c.Assert(err, IsNil)
+	c.Assert(hasNext, Equals, false)
 
 	// clear channel
 	s.jq.maybeJobIds = make(chan int64)
