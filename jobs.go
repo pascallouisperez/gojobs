@@ -211,6 +211,14 @@ func (jq *JobQueue) fetcher(fetcherIndex int) {
 		if !hasNext {
 			time.Sleep(1 * time.Second)
 			continue
+		} else {
+			locked, err := jq.attemptLock(jobId)
+			if err != nil {
+				glog.Infof("fetcher[%d] internal error while attempting to lock job: %s", fetcherIndex, err)
+			}
+			if !locked {
+				continue
+			}
 		}
 
 		select {
@@ -230,14 +238,6 @@ func (jq *JobQueue) worker(workerIndex int) {
 		}
 
 		jobId := <-jq.maybeJobIds
-
-		locked, err := jq.attemptLock(jobId)
-		if err != nil {
-			glog.Infof("worker[%d] internal error while attempting to lock job: %s", workerIndex, err)
-		}
-		if !locked {
-			continue
-		}
 
 		rec, err := jq.getJobRecord(jobId)
 		if err != nil {
