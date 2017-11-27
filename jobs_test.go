@@ -226,6 +226,36 @@ func (s *JobsSuite) TestAttemptLock_concurrentModification(c *C) {
 	c.Assert(locked, Equals, false)
 }
 
+func (s *JobsSuite) TestAttemptLock_respectSchedulableAt(c *C) {
+	var (
+		jobId int64
+		err   error
+	)
+
+	s.inTx(func(tx *sql.Tx) {
+		jobId, err = s.jq.Enqueue(tx, "name_of_job", nil)
+		c.Assert(err, IsNil)
+	})
+
+	// Let's assume schedulable_at was deferred while we were getting ready to lock
+	_, err = s.db.Exec("update job_queue set schedulable_at = ? where id = ?",
+		6, jobId)
+	c.Assert(err, IsNil)
+
+	// Now, we shouldn't be able to lock.
+	clock := s.jq.clock.(*fakeClock)
+	clock.now = 5
+	locked, err := s.jq.attemptLock(jobId)
+	c.Assert(err, IsNil)
+	c.Assert(locked, Equals, false)
+
+	// Now, a iota later, we should be able to lock.
+	clock.now = 6
+	locked, err = s.jq.attemptLock(jobId)
+	c.Assert(err, IsNil)
+	c.Assert(locked, Equals, true)
+}
+
 func (s *JobsSuite) TestMaybeNext(c *C) {
 	// We start with no jobs, nothing is schedulable.
 	jobId, hasNext, err := s.jq.maybeNext()
@@ -298,6 +328,7 @@ func (s *JobsSuite) TestReEnqueue(c *C) {
 	c.Assert(rec.schedulableAt, Equals, 700+conf.backoffInSeconds)
 
 	// 2nd execution
+	clock.now = 700 + conf.backoffInSeconds
 	locked, err = s.jq.attemptLock(rec.id)
 	c.Assert(err, IsNil)
 	c.Assert(locked, Equals, true)
@@ -311,6 +342,7 @@ func (s *JobsSuite) TestReEnqueue(c *C) {
 	c.Assert(rec.schedulableAt, Equals, 800+2*conf.backoffInSeconds)
 
 	// 3rd execution
+	clock.now = 800 + 2*conf.backoffInSeconds
 	locked, err = s.jq.attemptLock(rec.id)
 	c.Assert(err, IsNil)
 	c.Assert(locked, Equals, true)

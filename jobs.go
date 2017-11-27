@@ -431,9 +431,10 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 }
 
 func (jq *JobQueue) attemptLock(jobId int64) (bool, error) {
+	now := jq.clock.UnixNow()
 	res, err := jq.db.Exec(
-		"update job_queue set status = ?, processor_id = ?, remaining = remaining - 1 where id = ? and status = ?",
-		statusProcessing, jq.processorId, jobId, statusPending)
+		"update job_queue set status = ?, processor_id = ?, remaining = remaining - 1 where id = ? and status = ? and schedulable_at <= ?",
+		statusProcessing, jq.processorId, jobId, statusPending, now)
 	if err != nil {
 		return false, err
 	}
