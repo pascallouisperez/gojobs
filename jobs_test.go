@@ -204,26 +204,46 @@ func (s *JobsSuite) TestAttemptLock_decreasesRemaining(c *C) {
 	c.Assert(rec.remaining, Equals, conf.attempts-1)
 }
 
-func (s *JobsSuite) TestAttemptLock_concurrentModification(c *C) {
+func (s *JobsSuite) TestFetcherExecutesAttemptLock(c *C) {
 	var (
 		jobId int64
 		err   error
 	)
+
+	// queue is clear
+	jobId, hasNext, err := s.jq.maybeNext()
+	c.Assert(err, IsNil)
+	c.Assert(hasNext, Equals, false)
+
+	// clear channel
+	s.jq.maybeJobIds = make(chan int64)
 
 	s.inTx(func(tx *sql.Tx) {
 		jobId, err = s.jq.Enqueue(tx, "name_of_job", nil)
 		c.Assert(err, IsNil)
 	})
 
-	// Let's assume another worked raced us to process the job.
-	_, err = s.db.Exec("update job_queue set status = ? where id = ?",
-		statusProcessing, jobId)
+	// mark queue as running
+	atomic.StoreInt32(s.jq.status, queueRunning)
+	go s.jq.fetcher(0)
+	nextJobId := <-s.jq.maybeJobIds
+
+	// test that fetcher sent expected jobId to maybeJobIds
+	c.Assert(nextJobId, Equals, jobId)
+
+	var status string
+	err = s.jq.db.
+		QueryRow(
+			"select status from job_queue where id = ?",
+			jobId).
+		Scan(&status)
 	c.Assert(err, IsNil)
 
-	// Now, we shouldn't be able to lock.
-	locked, err := s.jq.attemptLock(jobId)
-	c.Assert(err, IsNil)
-	c.Assert(locked, Equals, false)
+	// test that fetcher locked the jobId
+	c.Assert(status, Equals, statusProcessing)
+
+	// stop fetcher
+	atomic.StoreInt32(s.jq.status, queueStopping)
 }
 
 func (s *JobsSuite) TestAttemptLock_respectSchedulableAt(c *C) {
