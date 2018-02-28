@@ -41,6 +41,7 @@ type JobQueue struct {
 	numFetchers int
 	numWorkers  int
 
+	jobName     string
 	db          *sql.DB
 	processorId int64
 	configs     map[string]jobConfig
@@ -65,11 +66,12 @@ type Job interface {
 }
 
 type jobConfig struct {
-	name             string
-	handler          reflect.Value
-	paramsType       reflect.Type
-	attempts         int
-	backoffInSeconds int64
+	name               string
+	handler            reflect.Value
+	paramsType         reflect.Type
+	attempts           int
+	backoffInSeconds   int64
+	backoffExponential bool
 }
 
 type jobRecord struct {
@@ -96,6 +98,7 @@ type QueueConfiguration struct {
 	// NumWorkers specifies the number of workers (i.e. goroutines processing
 	// jobs) to spawn when this queue is started. Default is 5.
 	NumWorkers int
+	Name       string
 }
 
 func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) *JobQueue {
@@ -115,9 +118,11 @@ func NewJobQueue(db *sql.DB, processorId int64, optConfs ...QueueConfiguration) 
 		panic("too many configurations provided")
 	} else if size == 1 {
 		conf := optConfs[0]
+		jq.jobName = conf.Name
 		if conf.NumWorkers > 0 {
 			jq.numWorkers = conf.NumWorkers
 		}
+
 	}
 
 	return &jq
@@ -137,6 +142,9 @@ type JobConfiguration struct {
 	// While time.Duration can be expressed in nanoseconds, only durations of seconds
 	// or more are considered valid.
 	Backoff time.Duration
+
+	// BackoffExponential specifies whether to use exponential values for back or not
+	BackoffExponential bool
 }
 
 func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobConfiguration) error {
@@ -171,11 +179,12 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 
 	// Defaults.
 	conf := jobConfig{
-		name:             name,
-		handler:          reflect.ValueOf(handler),
-		paramsType:       paramsType,
-		attempts:         3,
-		backoffInSeconds: 5,
+		name:               name,
+		handler:            reflect.ValueOf(handler),
+		paramsType:         paramsType,
+		attempts:           100,
+		backoffInSeconds:   3,
+		backoffExponential: false,
 	}
 
 	// Optional configuration.
@@ -189,6 +198,9 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 		if b := optConf.Backoff.Nanoseconds() / 1000000000; b > 0 {
 			conf.backoffInSeconds = b
 		}
+
+		conf.backoffExponential = optConf.BackoffExponential
+
 	}
 
 	jq.configs[name] = conf
@@ -196,7 +208,6 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 }
 
 func (jq *JobQueue) fetcher(fetcherIndex int) {
-	jq.fetcherWg.Add(1)
 	defer jq.fetcherWg.Done()
 
 	for {
@@ -221,7 +232,6 @@ func (jq *JobQueue) fetcher(fetcherIndex int) {
 }
 
 func (jq *JobQueue) worker(workerIndex int) {
-	jq.workersWg.Add(1)
 	defer jq.workersWg.Done()
 
 	for {
@@ -260,7 +270,6 @@ func (jq *JobQueue) worker(workerIndex int) {
 			glog.Infof("worker[%d] internal error in post process of job: %s", err)
 		}
 	}
-
 }
 
 func (jq *JobQueue) Start() error {
@@ -275,11 +284,13 @@ func (jq *JobQueue) Start() error {
 
 	// Start fetchers.
 	for i := 0; i < jq.numFetchers; i++ {
+		jq.fetcherWg.Add(1)
 		go jq.fetcher(i)
 	}
 
 	// Start workers.
 	for i := 0; i < jq.numWorkers; i++ {
+		jq.workersWg.Add(1)
 		go jq.worker(i)
 	}
 
@@ -412,9 +423,9 @@ func (jq *JobQueue) maybeNext() (int64, bool, error) {
 	now := jq.clock.UnixNow()
 	rows, err := jq.db.Query(`
 		select id from job_queue
-		where status = ? and remaining > 0 and schedulable_at <= ?
+		where name = ? and status = ? and remaining > 0 and schedulable_at <= ?
 		order by schedulable_at asc limit 1`,
-		statusPending, now)
+		jq.jobName, statusPending, now)
 	if err != nil {
 		return -1, false, err
 	}
@@ -454,7 +465,11 @@ func (jq *JobQueue) markAs(jobId int64, status string) error {
 
 func (jq *JobQueue) reEnqueue(rec *jobRecord) error {
 	conf := jq.configs[rec.name]
-	backoffMultiplier := 1 << uint(rec.attempt(conf)-1)
+	backoffMultiplier := 1
+	if conf.backoffExponential {
+		backoffMultiplier = 1 << uint(rec.attempt(conf)-1)
+	}
+
 	newSchedulableAt := jq.clock.UnixNow() + conf.backoffInSeconds*int64(backoffMultiplier)
 	_, err := jq.db.Exec(
 		"update job_queue set status = ?, schedulable_at = ?, processor_id = null where id = ?",
