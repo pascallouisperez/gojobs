@@ -208,7 +208,6 @@ func (jq *JobQueue) Register(name string, handler interface{}, optConfs ...JobCo
 }
 
 func (jq *JobQueue) fetcher(fetcherIndex int) {
-	jq.fetcherWg.Add(1)
 	defer jq.fetcherWg.Done()
 
 	for {
@@ -233,7 +232,6 @@ func (jq *JobQueue) fetcher(fetcherIndex int) {
 }
 
 func (jq *JobQueue) worker(workerIndex int) {
-	jq.workersWg.Add(1)
 	defer jq.workersWg.Done()
 
 	for {
@@ -286,11 +284,13 @@ func (jq *JobQueue) Start() error {
 
 	// Start fetchers.
 	for i := 0; i < jq.numFetchers; i++ {
+		jq.fetcherWg.Add(1)
 		go jq.fetcher(i)
 	}
 
 	// Start workers.
 	for i := 0; i < jq.numWorkers; i++ {
+		jq.workersWg.Add(1)
 		go jq.worker(i)
 	}
 
